@@ -8,11 +8,7 @@ import java.time.LocalDate;
 import java.util.Date;
 
 @Entity
-@Table(name = "stock_data",
-        uniqueConstraints = {
-                @UniqueConstraint(columnNames = {"stock", "date"})
-        }
-)
+@Table(name = "stock_data",uniqueConstraints = {@UniqueConstraint(columnNames = {"stock", "date"})})
 @Data
 public class StockIndexRecord {
     @Id

@@ -1,11 +1,13 @@
 package com.stock.dowjonesindex.service;
 
 import com.stock.dowjonesindex.model.StockIndexRecord;
+import com.stock.dowjonesindex.util.DeleteResult;
 import com.stock.dowjonesindex.util.FileUploadResponse;
 import com.stock.dowjonesindex.util.StockIndexResponse;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface StockIndexServiceInterFace {
 
@@ -13,9 +15,13 @@ public interface StockIndexServiceInterFace {
 
     StockIndexResponse<List<StockIndexRecord>> getAllStocks();
 
-    StockIndexResponse<StockIndexRecord> updateById(Long id, StockIndexRecord updated);
+    Optional<StockIndexRecord> findById(Long id);
 
-    StockIndexResponse<Void> deleteById(Long id);
+    StockIndexResponse<List<StockIndexRecord>> findByStock(String stock);
 
-    StockIndexResponse<Void> bulkDeleteByIds(List<Long> ids);
+    StockIndexResponse<Object> updateById(Long id, StockIndexRecord updated);
+
+    StockIndexResponse<DeleteResult> deleteById(Long id);
+
+    StockIndexResponse<Object> bulkDeleteByIds(List<Long> ids);
 }

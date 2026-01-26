@@ -4,11 +4,13 @@ import com.stock.dowjonesindex.model.StockIndexCsvDto;
 import com.stock.dowjonesindex.model.StockIndexRecord;
 import com.stock.dowjonesindex.repository.StockRepository;
 import com.stock.dowjonesindex.util.*;
-import jakarta.persistence.EntityNotFoundException;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
@@ -20,57 +22,105 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 @Service
 public class StockIndexServiceImpl implements StockIndexServiceInterFace {
     private final StockRepository stockRepository;
+    private static final DataFormatter EXCEL_FORMATTER = new DataFormatter(Locale.US);
     public StockIndexServiceImpl(StockRepository stockRepository) {
         this.stockRepository = stockRepository;
     }
 
     @Override
     public FileUploadResponse processUpload(MultipartFile multipartFile) throws Exception {
-        String contentType = multipartFile.getContentType();
-        FileUploadResponse fileUploadResponse = null;
-        if (contentType.equals("text/csv")) {
-            fileUploadResponse = parseCSV(multipartFile);
+        String fileName = multipartFile.getOriginalFilename();
+        String extension = fileExtension(fileName);
+        if ("csv".equals(extension)) {
+            return parseCSV(multipartFile);
         }
-        else if (contentType.equals("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) {
-            fileUploadResponse = parseExcel(multipartFile.getInputStream());
-        } else {
-            throw new IllegalArgumentException("Unsupported file type");
-        }
-        return fileUploadResponse;
-    }
-    FileUploadResponse parseExcel(InputStream  inputStream) throws IOException {
-        FileUploadResponse fileUploadResponse=new FileUploadResponse();
-        Workbook workbook = new XSSFWorkbook(inputStream);
-        Sheet sheet = workbook.getSheetAt(0);
-        int rowNum = 0;
-        for (Row row : sheet) {
-            rowNum++;
-            if (rowNum == 1) continue; // skip header
-            RowFailure failure = new RowFailure();
-            failure.rowNumber = rowNum;
-            try {
-                StockIndexRecord stockIndexRecord = parseAndValidate(row, failure);
-                if (failure.columnErrors.isEmpty()) {
-                    stockRepository.save(stockIndexRecord);
-                    fileUploadResponse.insertedRows++;
-                } else {
-                    fileUploadResponse.failedRows++;
-                    fileUploadResponse.failures.add(failure);
-                }
-            } catch (Exception e) {
-                failure.columnErrors.put("row", e.getMessage());
-                fileUploadResponse.failedRows++;
-                fileUploadResponse.failures.add(failure);
+        if ("xlsx".equals(extension)) {
+            try (InputStream inputStream = multipartFile.getInputStream()) {
+                return parseExcel(inputStream);
             }
         }
-        fileUploadResponse.totalRows = fileUploadResponse.insertedRows + fileUploadResponse.failedRows;
-        workbook.close();
-        return fileUploadResponse;
+
+        String contentType = multipartFile.getContentType();
+        if ("text/csv".equalsIgnoreCase(contentType)) {
+            return parseCSV(multipartFile);
+        }
+        if ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".equalsIgnoreCase(contentType)) {
+            try (InputStream inputStream = multipartFile.getInputStream()) {
+                return parseExcel(inputStream);
+            }
+        }
+        throw new IllegalArgumentException("Unsupported file type; only .csv and .xlsx are supported");
+    }
+
+    private static String fileExtension(String fileName) {
+        if (fileName == null) return "";
+        int dot = fileName.lastIndexOf('.');
+        if (dot < 0 || dot == fileName.length() - 1) return "";
+        return fileName.substring(dot + 1).trim().toLowerCase(Locale.ROOT);
+    }
+
+    FileUploadResponse parseExcel(InputStream inputStream) throws IOException {
+        FileUploadResponse fileUploadResponse = new FileUploadResponse();
+        List<FailedRowRecord> failedRowRecords = new ArrayList<>();
+        Set<String> seenStockDateKeys = new LinkedHashSet<>();
+        try (Workbook workbook = new XSSFWorkbook(inputStream)) {
+            Sheet sheet = workbook.getSheetAt(0);
+            for (Row row : sheet) {
+                int rowNumber = row.getRowNum() + 1; // 1-based, matches Excel display
+                if (rowNumber == 1) continue; // skip header
+                if (isExcelRowEmpty(row)) continue; // skip trailing/empty rows
+                RowFailure failure = new RowFailure();
+                failure.rowNumber = rowNumber;
+                try {
+                    StockIndexRecord stockIndexRecord = parseAndValidate(row, failure);
+                    if (failure.columnErrors.isEmpty()) {
+                        String duplicateKey = stockDateKey(stockIndexRecord);
+                        if (duplicateKey != null && !seenStockDateKeys.add(duplicateKey)) {
+                            failure.columnErrors.put("stock", "Duplicate stock/date in upload: " + duplicateKey);
+                            fileUploadResponse.failedRows++;
+                            fileUploadResponse.failures.add(failure);
+                            failedRowRecords.add(new FailedRowRecord(rowNumber, "stock", duplicateKey,
+                                    "Duplicate stock/date in upload"));
+                            continue;
+                        }
+                        stockRepository.save(stockIndexRecord);
+                        fileUploadResponse.insertedRows++;
+                    } else {
+                        fileUploadResponse.failedRows++;
+                        fileUploadResponse.failures.add(failure);
+                        for (var entry : failure.columnErrors.entrySet()) {
+                            String col = entry.getKey();
+                            String msg = entry.getValue();
+                            String invalidValue = valueForExcelColumn(row, col);
+                            failedRowRecords.add(new FailedRowRecord(rowNumber, col, invalidValue, msg));
+                        }
+                    }
+                } catch (Exception e) {
+                    if (isDuplicateStockDateException(e)) {
+                        String duplicateKey = stockDateKeyFromRow(row);
+                        failure.columnErrors.put("stock", "Duplicate stock/date already exists: " + duplicateKey);
+                        fileUploadResponse.failedRows++;
+                        fileUploadResponse.failures.add(failure);
+                        failedRowRecords.add(new FailedRowRecord(rowNumber, "stock", duplicateKey,
+                                "Duplicate stock/date already exists"));
+                    } else {
+                        failure.columnErrors.put("row", e.getMessage());
+                        fileUploadResponse.failedRows++;
+                        fileUploadResponse.failures.add(failure);
+                        failedRowRecords.add(new FailedRowRecord(rowNumber, "row", null, e.getMessage()));
+                    }
+                }
+            }
+            fileUploadResponse.totalRows = fileUploadResponse.insertedRows + fileUploadResponse.failedRows;
+            fileUploadResponse.setFailedRowRecords(failedRowRecords);
+            return fileUploadResponse;
+        }
     }
     public  LocalDate safeParseDate(String value) {
 
@@ -92,82 +142,179 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return null; // invalid date
     }
     private StockIndexRecord parseAndValidate(Row row, RowFailure failure) {
-        StockIndexRecord stockIndexRecord=new StockIndexRecord();
+        StockIndexRecord stockIndexRecord = new StockIndexRecord();
         // quarter
-        Integer quarter = getInt(row, 0, "quarter", failure);
-        System.out.println("quarter...."+quarter);
-        if (quarter == null) {
+        Integer quarter = getRequiredInt(row, 0, "quarter", failure);
+        if (quarter == null || quarter < 1 || quarter > 4) {
             failure.columnErrors.put("quarter", "Quarter must be 1 to 4");
-        }else {
-            stockIndexRecord.setQuarter(quarter.intValue());
+        } else {
+            stockIndexRecord.setQuarter(quarter);
         }
         // stock
-        String stock = getString(row, 1,"stock",failure);
-        if (stock == null || stock.isBlank()) {
-            failure.columnErrors.put("stock", "Stock is mandatory");
-        }else {
+        String stock = getRequiredString(row, 1, "stock", failure);
+        if (stock != null) {
             stockIndexRecord.setStock(stock);
         }
-// date
-        try {
-//            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("M/d/yyyy");
-//            String date =row.getCell(2).toString();
-//            System.out.println("date..."+date);
-//            LocalDate dateObjfor = LocalDate.parse(date, formatter);
-//            System.out.println("date objectfor"+dateObjfor);
-            LocalDate localDate= safeParseDate(row.getCell(2).toString());
-            System.out.println(localDate);
-            stockIndexRecord.setDate(localDate);
-        } catch (Exception ex) {
-            failure.columnErrors.put("date", "Invalid date format");
+
+        // date
+        String rawDate = getRequiredString(row, 2, "date", failure);
+        if (rawDate != null) {
+            LocalDate localDate = safeParseDate(rawDate);
+            if (localDate == null) {
+                failure.columnErrors.put("date", "Invalid date format");
+            } else {
+                stockIndexRecord.setDate(localDate);
+            }
         }
-        stockIndexRecord.setOpen(getDecimal(row, 3, "open", failure));
-        stockIndexRecord.setHigh(getDecimal(row, 4, "high", failure));
-        stockIndexRecord.setLow(getDecimal(row, 5, "low", failure));
-        stockIndexRecord.setClose(getDecimal(row, 6, "close", failure));
-        stockIndexRecord.setVolume(getLong(row, 7, "volume", failure).longValue());
-        stockIndexRecord.setPercentChangePrice(getDecimal(row, 8, "percent_change_price", failure));
-        stockIndexRecord.setPercentChangeVolumeOverLastWk(getDecimal(row, 9, "percent_change_volume_over_last_wk", failure));
-        stockIndexRecord.setPreviousWeeksVolume(getDecimal(row, 10, "previous_weeks_volume", failure));
-        stockIndexRecord.setNextWeeksOpen(getDecimal(row, 11, "next_weeks_open", failure));
-        stockIndexRecord.setNextWeeksClose(getDecimal(row, 12, "next_weeks_close", failure));
-        stockIndexRecord.setPercentChangeNextWeeksPrice(getDecimal(row, 13, "percent_change_next_weeks_price", failure));
-        stockIndexRecord.setDaysToNextDividend(getInt(row, 14, "days_to_next_dividend", failure).intValue());
-        stockIndexRecord.setPercentReturnNextDividend(getDecimal(row, 15, "percent_return_next_dividend", failure));
+
+        Double open = getRequiredDecimal(row, 3, "open", failure);
+        if (open != null && open < 0) failure.columnErrors.put("open", "open must be a valid number >= 0");
+        stockIndexRecord.setOpen(open);
+
+        Double high = getRequiredDecimal(row, 4, "high", failure);
+        if (high != null && high < 0) failure.columnErrors.put("high", "high must be a valid number >= 0");
+        stockIndexRecord.setHigh(high);
+
+        Double low = getRequiredDecimal(row, 5, "low", failure);
+        if (low != null && low < 0) failure.columnErrors.put("low", "low must be a valid number >= 0");
+        stockIndexRecord.setLow(low);
+
+        Double close = getRequiredDecimal(row, 6, "close", failure);
+        if (close != null && close < 0) failure.columnErrors.put("close", "close must be a valid number >= 0");
+        stockIndexRecord.setClose(close);
+
+        Long volume = getRequiredLong(row, 7, "volume", failure);
+        if (volume != null && volume <= 0) failure.columnErrors.put("volume", "volume must be a valid integer > 0");
+        if (volume != null) stockIndexRecord.setVolume(volume);
+
+        stockIndexRecord.setPercentChangePrice(getOptionalDecimal(row, 8, "percent_change_price", failure));
+        stockIndexRecord.setPercentChangeVolumeOverLastWk(getOptionalDecimal(row, 9, "percent_change_volume_over_last_wk", failure));
+        stockIndexRecord.setPreviousWeeksVolume(getOptionalDecimal(row, 10, "previous_weeks_volume", failure));
+        stockIndexRecord.setNextWeeksOpen(getOptionalDecimal(row, 11, "next_weeks_open", failure));
+        stockIndexRecord.setNextWeeksClose(getOptionalDecimal(row, 12, "next_weeks_close", failure));
+        stockIndexRecord.setPercentChangeNextWeeksPrice(getOptionalDecimal(row, 13, "percent_change_next_weeks_price", failure));
+
+        Integer daysToNextDividend = getRequiredInt(row, 14, "days_to_next_dividend", failure);
+        if (daysToNextDividend != null && daysToNextDividend < 0) {
+            failure.columnErrors.put("days_to_next_dividend", "days_to_next_dividend must be a valid integer >= 0");
+        }
+        if (daysToNextDividend != null) stockIndexRecord.setDaysToNextDividend(daysToNextDividend);
+
+        Double percentReturnNextDividend = getRequiredDecimal(row, 15, "percent_return_next_dividend", failure);
+        if (percentReturnNextDividend != null) stockIndexRecord.setPercentReturnNextDividend(percentReturnNextDividend);
         return stockIndexRecord;
     }
 
-    private String getString(Row row, int i,String col, RowFailure f) {
-        try { return row.getCell(i).getStringCellValue(); }
-        catch (Exception e) {
-            f.columnErrors.put(col, "Invalid String "+col);
-            return null;
-        }
+    private static String valueForExcelColumn(Row row, String column) {
+        int index = switch (column) {
+            case "quarter" -> 0;
+            case "stock" -> 1;
+            case "date" -> 2;
+            case "open" -> 3;
+            case "high" -> 4;
+            case "low" -> 5;
+            case "close" -> 6;
+            case "volume" -> 7;
+            case "percent_change_price" -> 8;
+            case "percent_change_volume_over_last_wk" -> 9;
+            case "previous_weeks_volume" -> 10;
+            case "next_weeks_open" -> 11;
+            case "next_weeks_close" -> 12;
+            case "percent_change_next_weeks_price" -> 13;
+            case "days_to_next_dividend" -> 14;
+            case "percent_return_next_dividend" -> 15;
+            default -> -1;
+        };
+        if (index < 0) return null;
+        Cell cell = row.getCell(index);
+        if (cell == null) return null;
+        String value = EXCEL_FORMATTER.formatCellValue(cell);
+        if (value == null) return null;
+        value = value.trim();
+        return value.isEmpty() ? null : value;
     }
 
-    private Integer getInt(Row row, int i, String col, RowFailure f) {
-        try { return (int) row.getCell(i).getNumericCellValue(); }
-        catch (Exception e) {
-            f.columnErrors.put(col, "Invalid integer "+col);
-            return null;
-        }
+    private static String sanitizeNumeric(String raw) {
+        if (raw == null) return null;
+        return raw.replace("$", "").replace(",", "").trim();
     }
 
-
-    private Long getLong(Row row, int i, String col, RowFailure f) {
-        try { return (long) row.getCell(i).getNumericCellValue(); }
-        catch (Exception e) {
-            f.columnErrors.put(col, "Invalid long "+col);
-            return null;
-        }
+    private static boolean isBlankCell(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
+    private static String getCellString(Row row, int index) {
+        if (row == null) return null;
+        Cell cell = row.getCell(index);
+        if (cell == null) return null;
+        String value = EXCEL_FORMATTER.formatCellValue(cell);
+        if (value == null) return null;
+        value = value.trim();
+        return value.isEmpty() ? null : value;
+    }
 
-    private Double getDecimal(Row row, int i, String col, RowFailure f) {
+    private String getRequiredString(Row row, int index, String col, RowFailure f) {
+        String value = getCellString(row, index);
+        if (isBlankCell(value)) {
+            f.columnErrors.put(col, col + " cannot be null or blank");
+            return null;
+        }
+        return value;
+    }
+
+    private Integer getRequiredInt(Row row, int index, String col, RowFailure f) {
+        String raw = getCellString(row, index);
+        if (isBlankCell(raw)) {
+            f.columnErrors.put(col, col + " cannot be null or blank");
+            return null;
+        }
         try {
-            return Double.parseDouble(row.getCell(i).toString().replace("$", "")); }
-        catch (Exception e) {
-            f.columnErrors.put(col, "Invalid decimal "+col);
+            double parsed = Double.parseDouble(sanitizeNumeric(raw));
+            if (Math.floor(parsed) != parsed) throw new NumberFormatException("non-integer");
+            return (int) parsed;
+        } catch (Exception e) {
+            f.columnErrors.put(col, "Invalid integer " + col);
+            return null;
+        }
+    }
+
+    private Long getRequiredLong(Row row, int index, String col, RowFailure f) {
+        String raw = getCellString(row, index);
+        if (isBlankCell(raw)) {
+            f.columnErrors.put(col, col + " cannot be null or blank");
+            return null;
+        }
+        try {
+            double parsed = Double.parseDouble(sanitizeNumeric(raw));
+            if (Math.floor(parsed) != parsed) throw new NumberFormatException("non-integer");
+            return (long) parsed;
+        } catch (Exception e) {
+            f.columnErrors.put(col, "Invalid long " + col);
+            return null;
+        }
+    }
+
+    private Double getRequiredDecimal(Row row, int index, String col, RowFailure f) {
+        String raw = getCellString(row, index);
+        if (isBlankCell(raw)) {
+            f.columnErrors.put(col, col + " cannot be null or blank");
+            return null;
+        }
+        try {
+            return Double.parseDouble(sanitizeNumeric(raw));
+        } catch (Exception e) {
+            f.columnErrors.put(col, "Invalid decimal " + col);
+            return null;
+        }
+    }
+
+    private Double getOptionalDecimal(Row row, int index, String col, RowFailure f) {
+        String raw = getCellString(row, index);
+        if (isBlankCell(raw)) return null;
+        try {
+            return Double.parseDouble(sanitizeNumeric(raw));
+        } catch (Exception e) {
+            f.columnErrors.put(col, "Invalid decimal " + col);
             return null;
         }
     }
@@ -175,6 +322,14 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
     @Override
     public StockIndexResponse<List<StockIndexRecord>> getAllStocks() {
         List<StockIndexRecord> stockIndexRecordList = stockRepository.findAll();
+        if (stockIndexRecordList == null || stockIndexRecordList.isEmpty()) {
+            return new StockIndexResponse<>(
+                    "SUCCESS",
+                    "No records found",
+                    0,
+                    stockIndexRecordList == null ? List.of() : stockIndexRecordList
+            );
+        }
         return new StockIndexResponse<>(
                 "SUCCESS",
                 "Records fetched successfully",
@@ -182,11 +337,35 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
     }
 
     @Override
-    public StockIndexResponse<StockIndexRecord> updateById(Long id, StockIndexRecord updated) {
-        // check existence
-        StockIndexRecord existing = stockRepository.findById(id)
-                .orElseThrow(() ->
-                        new EntityNotFoundException("Stock not found with id: " + id));
+    public Optional<StockIndexRecord> findById(Long id) {
+        return stockRepository.findById(id);
+    }
+
+    @Override
+    public StockIndexResponse<List<StockIndexRecord>> findByStock(String stock) {
+        if (stock == null || stock.isBlank()) {
+            return new StockIndexResponse<>("SUCCESS", "No Stock records found", 0, List.of());
+        }
+        List<StockIndexRecord> records = stockRepository.findByStock(stock.trim());
+        if (records == null || records.isEmpty()) {
+            return new StockIndexResponse<>("SUCCESS", "No Stock records found", 0, List.of());
+        }
+        return new StockIndexResponse<>("SUCCESS", "Stock Record fetched successfully", records.size(), records);
+    }
+
+    @Override
+    public StockIndexResponse<Object> updateById(Long id, StockIndexRecord updated) {
+        Optional<StockIndexRecord> existingOpt = stockRepository.findById(id);
+        if (existingOpt.isEmpty()) {
+            String detail = "No stock record found with id: " + id;
+            return new StockIndexResponse<>(
+                    "SUCCESS",
+                    detail,
+                    0,
+                    new ErrorResult(ErrorCodes.NO_RECORD_FOUND, detail)
+            );
+        }
+        StockIndexRecord existing = existingOpt.get();
         existing.setQuarter(updated.getQuarter());
         existing.setStock(updated.getStock());
         existing.setDate(updated.getDate());
@@ -204,28 +383,31 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         );
     }
     @Override
-    public StockIndexResponse<Void> deleteById(Long id) {
+    public StockIndexResponse<DeleteResult> deleteById(Long id) {
         if (!stockRepository.existsById(id)) {
-            throw new EntityNotFoundException("Stock not found with id: " + id);
+            return new StockIndexResponse<>(
+                    "SUCCESS",
+                    "No stock record found with id: " + id,
+                    0,
+                    new DeleteResult(id)
+            );
         }
         stockRepository.deleteById(id);
-
         return new StockIndexResponse<>(
                 "SUCCESS",
                 "Record deleted successfully",
                 1,
-                null
+                new DeleteResult(id)
         );
     }
-
     @Override
-    public StockIndexResponse<Void> bulkDeleteByIds(List<Long> ids) {
+    public StockIndexResponse<Object> bulkDeleteByIds(List<Long> ids) {
         if (ids == null || ids.isEmpty()) {
             return new StockIndexResponse<>(
-                    "FAILED",
+                    "SUCCESS",
                     "No ids provided",
                     0,
-                    null
+                    new ErrorResult(ErrorCodes.INVALID_REQUEST, "No ids provided")
             );
         }
 
@@ -235,41 +417,42 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         }
         if (requested.isEmpty()) {
             return new StockIndexResponse<>(
-                    "FAILED",
+                    "SUCCESS",
                     "No ids provided",
                     0,
-                    null
+                    new ErrorResult(ErrorCodes.INVALID_REQUEST, "No ids provided")
             );
         }
-
         List<StockIndexRecord> existing = stockRepository.findAllById(requested);
         Set<Long> existingIds = new LinkedHashSet<>();
         for (StockIndexRecord r : existing) {
             if (r != null && r.getId() != null) existingIds.add(r.getId());
         }
-
-        if (existingIds.size() != requested.size()) {
-            Set<Long> missing = new LinkedHashSet<>(requested);
-            missing.removeAll(existingIds);
-            throw new EntityNotFoundException("Stock not found with id(s): " + missing);
+        Set<Long> missing = new LinkedHashSet<>(requested);
+        missing.removeAll(existingIds);
+        if (!missing.isEmpty()) {
+            return new StockIndexResponse<>(
+                    "SUCCESS",
+                    "Stock id(s) not found",
+                    0,
+                    new ErrorResult(ErrorCodes.STOCK_IDS_NOT_FOUND, "Stock record(s) not found for id(s): " + missing)
+            );
         }
-
         stockRepository.deleteAllById(existingIds);
-
         return new StockIndexResponse<>(
                 "SUCCESS",
                 "Records deleted successfully",
                 existingIds.size(),
-                null
+                new BulkDeleteResult(new ArrayList<>(existingIds), existingIds.size())
         );
     }
-
     public FileUploadResponse parseCSV(MultipartFile multipartFile) throws IOException {
         StockIndexRecord stockIndexRecord = null;
         List<FailedRowRecord> failedRows = new ArrayList<>();
-        List<StockIndexRecord> stockIndexRecordList = new ArrayList<>();
         int total = 0;
         int rowNum = 1;
+        int insertedRows = 0;
+        Set<String> seenStockDateKeys = new LinkedHashSet<>();
         try {
             List<StockIndexCsvDto> stockIndexCsvDtoList =
                     new CsvToBeanBuilder<StockIndexCsvDto>(
@@ -280,6 +463,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                             .parse();
             for (StockIndexCsvDto stockIndexCsvDto : stockIndexCsvDtoList) {
                 rowNum++;
+                if (isCsvRowEmpty(stockIndexCsvDto)) {
+                    continue; // skip blank/trailing lines
+                }
                 total++;
                 try {
                     List<FailedRowRecord> rowErrors = validateRow(stockIndexCsvDto, rowNum);
@@ -289,7 +475,21 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                         continue; // skip insert for this row
                     }
                     stockIndexRecord = mapToEntity(stockIndexCsvDto);
-                    stockIndexRecordList.add(stockIndexRecord);
+                    String duplicateKey = stockDateKey(stockIndexRecord);
+                    if (duplicateKey != null && !seenStockDateKeys.add(duplicateKey)) {
+                        failedRows.add(err(rowNum, "stock", duplicateKey, "Duplicate stock/date in upload"));
+                        continue;
+                    }
+                    try {
+                        stockRepository.save(stockIndexRecord);
+                        insertedRows++;
+                    } catch (Exception e) {
+                        if (isDuplicateStockDateException(e)) {
+                            failedRows.add(err(rowNum, "stock", duplicateKey, "Duplicate stock/date already exists"));
+                        } else {
+                            failedRows.add(err(rowNum, "row", null, e.getMessage()));
+                        }
+                    }
                 } catch (FileUploadValidationException fileUploadValidationException) {
                     failedRows.add(new FailedRowRecord(
                             fileUploadValidationException.getRowNumber(),
@@ -299,21 +499,20 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                     ));
                 }
             }
-            stockRepository.saveAll(stockIndexRecordList);
-////            if (!failedRows.isEmpty()) {
-////                writeFailedRowsResponse(uploadId, failedRows);
-//            }
         } catch (Exception e) {
             throw new RuntimeException("CSV File upload failed: " + e.getMessage());
         }
         FileUploadResponse fileUploadResponse = new FileUploadResponse();
         fileUploadResponse.setTotalRows(total);
-        fileUploadResponse.setInsertedRows(stockIndexRecordList.size());
-        fileUploadResponse.setFailedRows(failedRows.size());
+        fileUploadResponse.setInsertedRows(insertedRows);
+        int failedRowCount = (int) failedRows.stream()
+                .map(FailedRowRecord::getRowNumber)
+                .distinct()
+                .count();
+        fileUploadResponse.setFailedRows(failedRowCount);
         fileUploadResponse.setFailedRowRecords(failedRows);
         return fileUploadResponse;
     }
-
     private StockIndexRecord mapToEntity(StockIndexCsvDto stockIndexCsvDto) {
         LocalDate stockIndexDate = LocalDate.parse(stockIndexCsvDto.getDate(),DateTimeFormatter.ofPattern("M/d/yyyy"));
         StockIndexRecord stockIndexRecord = new StockIndexRecord();
@@ -339,7 +538,6 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
     private double parseDouble(String value) {
         return Double.parseDouble(value.replace("$", "").trim());
     }
-
     private Double parseNullableDouble(String value) {
         if (value == null || value.trim().isEmpty()) return null;
         return Double.parseDouble(value.replace("$", "").trim());
@@ -379,7 +577,6 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                         "Invalid date format. Expected M/d/yyyy"));
             }
         }
-
             // 4. open
             validateMoneyColumn(stockIndexCsvDto.getOpen(), rowNum, "open", errors);
 
@@ -514,6 +711,74 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
     }
     private FailedRowRecord err(int row, String col, String val, String msg) {
         return new FailedRowRecord(row, col, val, msg);
+    }
+
+    private static String stockDateKey(StockIndexRecord record) {
+        if (record == null || record.getStock() == null || record.getDate() == null) return null;
+        return record.getStock().trim() + "-" + record.getDate();
+    }
+
+    private static boolean isDuplicateStockDateException(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            if (cur instanceof DataIntegrityViolationException) return true;
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase(Locale.ROOT);
+                if (lower.contains("duplicate entry") || lower.contains("uk_stock_date")) return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    private static String stockDateKeyFromRow(Row row) {
+        String stock = getCellString(row, 1);
+        String date = getCellString(row, 2);
+        if (stock == null || date == null) return null;
+        LocalDate parsed = null;
+        try {
+            DateTimeFormatter[] formats = {
+                    DateTimeFormatter.ofPattern("M/d/yyyy"), DateTimeFormatter.ofPattern("MM/dd/yyyy"),
+                    DateTimeFormatter.ISO_LOCAL_DATE
+            };
+            for (DateTimeFormatter f : formats) {
+                try {
+                    parsed = LocalDate.parse(date.trim(), f);
+                    break;
+                } catch (Exception ignore) {
+                }
+            }
+        } catch (Exception ignore) {
+        }
+        return parsed == null ? (stock.trim() + "-" + date.trim()) : (stock.trim() + "-" + parsed);
+    }
+
+    private static boolean isExcelRowEmpty(Row row) {
+        for (int i = 0; i <= 15; i++) {
+            if (!isBlankCell(getCellString(row, i))) return false;
+        }
+        return true;
+    }
+
+    private boolean isCsvRowEmpty(StockIndexCsvDto dto) {
+        if (dto == null) return true;
+        if (dto.getQuarter() != 0) return false;
+        return isBlank(dto.getStock())
+                && isBlank(dto.getDate())
+                && isBlank(dto.getOpen())
+                && isBlank(dto.getHigh())
+                && isBlank(dto.getLow())
+                && isBlank(dto.getClose())
+                && isBlank(dto.getVolume())
+                && isBlank(dto.getPercent_change_price())
+                && isBlank(dto.getPercent_change_volume_over_last_wk())
+                && isBlank(dto.getPrevious_weeks_volume())
+                && isBlank(dto.getNext_weeks_open())
+                && isBlank(dto.getNext_weeks_close())
+                && isBlank(dto.getPercent_change_next_weeks_price())
+                && isBlank(dto.getDays_to_next_dividend())
+                && isBlank(dto.getPercent_return_next_dividend());
     }
 
 }

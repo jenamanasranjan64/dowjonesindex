@@ -1,7 +1,12 @@
 package com.stock.dowjonesindex.controller;
 
+import com.stock.dowjonesindex.dto.StockIndexUpdateRequest;
 import com.stock.dowjonesindex.model.StockIndexRecord;
 import com.stock.dowjonesindex.service.StockIndexServiceInterFace;
+import com.stock.dowjonesindex.util.BulkDeleteResult;
+import com.stock.dowjonesindex.util.DeleteResult;
+import com.stock.dowjonesindex.util.ErrorCodes;
+import com.stock.dowjonesindex.util.ErrorResult;
 import com.stock.dowjonesindex.util.FileUploadResponse;
 import com.stock.dowjonesindex.util.StockIndexResponse;
 import org.junit.jupiter.api.Test;
@@ -16,8 +21,10 @@ import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 class StockIndexControllerTest {
@@ -91,6 +98,8 @@ class StockIndexControllerTest {
     private static final class StubStockIndexService implements StockIndexServiceInterFace {
         private int processUploadCalls;
         private int getAllCalls;
+        private int findByIdCalls;
+        private int findByStockCalls;
         private int updateByIdCalls;
         private int deleteByIdCalls;
         private int bulkDeleteByIdsCalls;
@@ -99,9 +108,11 @@ class StockIndexControllerTest {
 
         private FileUploadResponse uploadResponse;
         private StockIndexResponse<List<StockIndexRecord>> getAllResponse;
-        private StockIndexResponse<StockIndexRecord> updateResponse;
-        private StockIndexResponse<Void> deleteResponse;
-        private StockIndexResponse<Void> bulkDeleteResponse;
+        private Optional<StockIndexRecord> findByIdResponse = Optional.empty();
+        private StockIndexResponse<List<StockIndexRecord>> findByStockResponse;
+        private StockIndexResponse<Object> updateResponse;
+        private StockIndexResponse<DeleteResult> deleteResponse;
+        private StockIndexResponse<Object> bulkDeleteResponse;
 
         @Override
         public FileUploadResponse processUpload(MultipartFile multipartFile) throws Exception {
@@ -117,19 +128,31 @@ class StockIndexControllerTest {
         }
 
         @Override
-        public StockIndexResponse<StockIndexRecord> updateById(Long id, StockIndexRecord updated) {
+        public Optional<StockIndexRecord> findById(Long id) {
+            findByIdCalls++;
+            return findByIdResponse;
+        }
+
+        @Override
+        public StockIndexResponse<List<StockIndexRecord>> findByStock(String stock) {
+            findByStockCalls++;
+            return findByStockResponse;
+        }
+
+        @Override
+        public StockIndexResponse<Object> updateById(Long id, StockIndexRecord updated) {
             updateByIdCalls++;
             return updateResponse;
         }
 
         @Override
-        public StockIndexResponse<Void> deleteById(Long id) {
+        public StockIndexResponse<DeleteResult> deleteById(Long id) {
             deleteByIdCalls++;
             return deleteResponse;
         }
 
         @Override
-        public StockIndexResponse<Void> bulkDeleteByIds(List<Long> ids) {
+        public StockIndexResponse<Object> bulkDeleteByIds(List<Long> ids) {
             bulkDeleteByIdsCalls++;
             return bulkDeleteResponse;
         }
@@ -141,10 +164,12 @@ class StockIndexControllerTest {
         StockIndexController controller = controllerWithService(service);
 
         MultipartFile empty = new StubMultipartFile("file", "stock.csv", "text/csv", new byte[0]);
-        ResponseEntity<FileUploadResponse> response = controller.uploadFile(empty);
+        ResponseEntity<StockIndexResponse<Object>> response = controller.uploadFile(empty);
 
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertNull(response.getBody());
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("SUCCESS", response.getBody().getStatus());
+        assertEquals(0, response.getBody().getRowsAffected());
+        assertEquals(new ErrorResult(ErrorCodes.INVALID_REQUEST, "File is required and must not be empty"), response.getBody().getData());
         assertEquals(0, service.processUploadCalls);
     }
 
@@ -154,10 +179,15 @@ class StockIndexControllerTest {
         StockIndexController controller = controllerWithService(service);
 
         MultipartFile txt = new StubMultipartFile("file", "stock.txt", "text/plain", "hello".getBytes());
-        ResponseEntity<FileUploadResponse> response = controller.uploadFile(txt);
+        ResponseEntity<StockIndexResponse<Object>> response = controller.uploadFile(txt);
 
-        assertEquals(HttpStatus.UNSUPPORTED_MEDIA_TYPE, response.getStatusCode());
-        assertNull(response.getBody());
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("SUCCESS", response.getBody().getStatus());
+        assertEquals(0, response.getBody().getRowsAffected());
+        assertEquals(
+                new ErrorResult(ErrorCodes.INVALID_REQUEST, "Unsupported file type; only .csv and .xlsx are supported"),
+                response.getBody().getData()
+        );
         assertEquals(0, service.processUploadCalls);
     }
 
@@ -173,10 +203,33 @@ class StockIndexControllerTest {
         serviceResponse.setFailedRows(1);
         service.uploadResponse = serviceResponse;
 
-        ResponseEntity<FileUploadResponse> response = controller.uploadFile(csv);
+        ResponseEntity<StockIndexResponse<Object>> response = controller.uploadFile(csv);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals(serviceResponse, response.getBody());
+        assertEquals("SUCCESS", response.getBody().getStatus());
+        assertEquals(serviceResponse.getInsertedRows(), response.getBody().getRowsAffected());
+        assertEquals(serviceResponse, response.getBody().getData());
+        assertEquals(1, service.processUploadCalls);
+    }
+
+    @Test
+    void uploadFile_allRowsInserted_returns201() throws Exception {
+        StubStockIndexService service = new StubStockIndexService();
+        StockIndexController controller = controllerWithService(service);
+
+        MultipartFile csv = new StubMultipartFile("file", "stock.csv", "text/csv", "a,b,c".getBytes());
+        FileUploadResponse serviceResponse = new FileUploadResponse();
+        serviceResponse.setTotalRows(3);
+        serviceResponse.setInsertedRows(3);
+        serviceResponse.setFailedRows(0);
+        service.uploadResponse = serviceResponse;
+
+        ResponseEntity<StockIndexResponse<Object>> response = controller.uploadFile(csv);
+
+        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        assertEquals("SUCCESS", response.getBody().getStatus());
+        assertEquals(serviceResponse.getInsertedRows(), response.getBody().getRowsAffected());
+        assertEquals(serviceResponse, response.getBody().getData());
         assertEquals(1, service.processUploadCalls);
     }
 
@@ -187,9 +240,12 @@ class StockIndexControllerTest {
         StockIndexController controller = controllerWithService(service);
 
         MultipartFile csv = new StubMultipartFile("file", "stock.csv", "text/csv", "a,b,c".getBytes());
-        ResponseEntity<FileUploadResponse> response = controller.uploadFile(csv);
+        ResponseEntity<StockIndexResponse<Object>> response = controller.uploadFile(csv);
 
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("SUCCESS", response.getBody().getStatus());
+        assertEquals(0, response.getBody().getRowsAffected());
+        assertNotNull(response.getBody().getData());
     }
 
     @Test
@@ -209,19 +265,78 @@ class StockIndexControllerTest {
     }
 
     @Test
+    void getById_whenPresent_returns200_andResponseBody() {
+        StubStockIndexService service = new StubStockIndexService();
+        StockIndexController controller = controllerWithService(service);
+        StockIndexRecord record = new StockIndexRecord();
+        record.setId(42L);
+        record.setStock("AA");
+        service.findByIdResponse = Optional.of(record);
+        ResponseEntity<StockIndexResponse<Object>> response = controller.getById(42L);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("SUCCESS", response.getBody().getStatus());
+        assertEquals(1, response.getBody().getRowsAffected());
+        assertEquals(record, response.getBody().getData());
+        assertEquals(1, service.findByIdCalls);
+    }
+
+    @Test
+    void getById_whenMissing_returns404_andFailedResponse() {
+        StubStockIndexService service = new StubStockIndexService();
+        StockIndexController controller = controllerWithService(service);
+
+        service.findByIdResponse = Optional.empty();
+
+        ResponseEntity<StockIndexResponse<Object>> response = controller.getById(999L);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("SUCCESS", response.getBody().getStatus());
+        assertEquals(0, response.getBody().getRowsAffected());
+        assertEquals(new ErrorResult(ErrorCodes.NO_RECORD_FOUND, "No stock record found with id: 999"), response.getBody().getData());
+        assertEquals(1, service.findByIdCalls);
+    }
+
+    @Test
+    void getByStock_whenPresent_returns200_andResponseBody() {
+        StubStockIndexService service = new StubStockIndexService();
+        StockIndexController controller = controllerWithService(service);
+
+        StockIndexRecord record = new StockIndexRecord();
+        record.setId(1L);
+        record.setStock("AA");
+        service.findByStockResponse = new StockIndexResponse<>("SUCCESS", "ok", 1, List.of(record));
+
+        ResponseEntity<StockIndexResponse<List<StockIndexRecord>>> response = controller.getByStock("AA");
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(service.findByStockResponse, response.getBody());
+        assertEquals(1, service.findByStockCalls);
+    }
+
+    @Test
     void updateById_returns200_andDelegatesToService() throws Exception {
         StubStockIndexService service = new StubStockIndexService();
         StockIndexController controller = controllerWithService(service);
 
+        StockIndexUpdateRequest request = new StockIndexUpdateRequest(
+                String.valueOf(2),
+                "AA",
+                "1/05/2015",
+                String.valueOf(16.71),
+                String.valueOf(16.71),
+                String.valueOf(15.64),
+                String.valueOf(15.97),
+                String.valueOf(242963398L)
+        );
+
         StockIndexRecord updatedRecord = new StockIndexRecord();
         updatedRecord.setId(42L);
         updatedRecord.setStock("AA");
-
-        StockIndexResponse<StockIndexRecord> serviceResponse =
+        StockIndexResponse<Object> serviceResponse =
                 new StockIndexResponse<>("SUCCESS", "updated", 1, updatedRecord);
         service.updateResponse = serviceResponse;
 
-        ResponseEntity<StockIndexResponse<StockIndexRecord>> response = controller.updateById(42L, updatedRecord);
+        ResponseEntity<StockIndexResponse<Object>> response = controller.updateById(42L, request);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(serviceResponse, response.getBody());
@@ -233,10 +348,11 @@ class StockIndexControllerTest {
         StubStockIndexService service = new StubStockIndexService();
         StockIndexController controller = controllerWithService(service);
 
-        StockIndexResponse<Void> serviceResponse = new StockIndexResponse<>("SUCCESS", "deleted", 1, null);
+        StockIndexResponse<DeleteResult> serviceResponse =
+                new StockIndexResponse<>("SUCCESS", "deleted", 1, new DeleteResult(42L));
         service.deleteResponse = serviceResponse;
 
-        ResponseEntity<StockIndexResponse<Void>> response = controller.deleteById(42L);
+        ResponseEntity<StockIndexResponse<DeleteResult>> response = controller.deleteById(42L);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(serviceResponse, response.getBody());
@@ -248,10 +364,35 @@ class StockIndexControllerTest {
         StubStockIndexService service = new StubStockIndexService();
         StockIndexController controller = controllerWithService(service);
 
-        StockIndexResponse<Void> serviceResponse = new StockIndexResponse<>("SUCCESS", "bulk deleted", 2, null);
+        StockIndexResponse<Object> serviceResponse = new StockIndexResponse<>(
+                "SUCCESS",
+                "bulk deleted",
+                2,
+                new BulkDeleteResult(List.of(1L, 2L), 2)
+        );
         service.bulkDeleteResponse = serviceResponse;
 
-        ResponseEntity<StockIndexResponse<Void>> response = controller.bulkDeleteByIds(List.of(1L, 2L));
+        ResponseEntity<StockIndexResponse<Object>> response = controller.bulkDeleteByIds(List.of(1L, 2L));
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(serviceResponse, response.getBody());
+        assertEquals(1, service.bulkDeleteByIdsCalls);
+    }
+
+    @Test
+    void bulkDeleteByIds_whenMissing_returns200_andErrorBody() {
+        StubStockIndexService service = new StubStockIndexService();
+        StockIndexController controller = controllerWithService(service);
+
+        StockIndexResponse<Object> serviceResponse = new StockIndexResponse<>(
+                "SUCCESS",
+                "Stock id(s) not found",
+                0,
+                new ErrorResult("STOCK_IDS_NOT_FOUND", "Stock record(s) not found for id(s): [2]")
+        );
+        service.bulkDeleteResponse = serviceResponse;
+
+        ResponseEntity<StockIndexResponse<Object>> response = controller.bulkDeleteByIds(List.of(1L, 2L));
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(serviceResponse, response.getBody());

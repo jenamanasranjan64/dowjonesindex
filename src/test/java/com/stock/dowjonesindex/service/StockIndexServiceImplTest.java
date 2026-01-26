@@ -2,9 +2,11 @@ package com.stock.dowjonesindex.service;
 
 import com.stock.dowjonesindex.model.StockIndexRecord;
 import com.stock.dowjonesindex.repository.StockRepository;
+import com.stock.dowjonesindex.util.BulkDeleteResult;
+import com.stock.dowjonesindex.util.DeleteResult;
+import com.stock.dowjonesindex.util.ErrorResult;
 import com.stock.dowjonesindex.util.FileUploadResponse;
 import com.stock.dowjonesindex.util.StockIndexResponse;
-import jakarta.persistence.EntityNotFoundException;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -114,6 +116,16 @@ class StockIndexServiceImplTest {
                         Long id = (Long) args[0];
                         return Optional.ofNullable(store.get(id));
                     }
+                    if (name.equals("findByStock")) {
+                        String stock = (String) args[0];
+                        List<StockIndexRecord> list = new ArrayList<>();
+                        for (StockIndexRecord r : store.values()) {
+                            if (r != null && r.getStock() != null && r.getStock().equals(stock)) {
+                                list.add(r);
+                            }
+                        }
+                        return list;
+                    }
                     if (name.equals("existsById")) {
                         Long id = (Long) args[0];
                         return store.containsKey(id);
@@ -195,6 +207,58 @@ class StockIndexServiceImplTest {
     }
 
     @Test
+    void getAllStocks_whenEmpty_returnsSuccessWithNoRecordsMessage() {
+        RepoHarness harness = new RepoHarness();
+        StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
+
+        StockIndexResponse<List<StockIndexRecord>> response = service.getAllStocks();
+
+        assertEquals("SUCCESS", response.getStatus());
+        assertEquals("No records found", response.getMessage());
+        assertEquals(0, response.getRowsAffected());
+        assertNotNull(response.getData());
+        assertEquals(0, response.getData().size());
+    }
+
+    @Test
+    void findByStock_whenMissing_returnsSuccessEmptyList() {
+        RepoHarness harness = new RepoHarness();
+        StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
+
+        StockIndexResponse<List<StockIndexRecord>> response = service.findByStock("AA");
+
+        assertEquals("SUCCESS", response.getStatus());
+        assertEquals(0, response.getRowsAffected());
+        assertNotNull(response.getData());
+        assertEquals(0, response.getData().size());
+    }
+
+    @Test
+    void findByStock_whenPresent_returnsMatchingRecords() {
+        RepoHarness harness = new RepoHarness();
+        StockIndexRecord a = new StockIndexRecord();
+        a.setId(1L);
+        a.setStock("AA");
+        StockIndexRecord b = new StockIndexRecord();
+        b.setId(2L);
+        b.setStock("BB");
+        StockIndexRecord a2 = new StockIndexRecord();
+        a2.setId(3L);
+        a2.setStock("AA");
+        harness.store.put(1L, a);
+        harness.store.put(2L, b);
+        harness.store.put(3L, a2);
+        StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
+
+        StockIndexResponse<List<StockIndexRecord>> response = service.findByStock("AA");
+
+        assertEquals("SUCCESS", response.getStatus());
+        assertEquals(2, response.getRowsAffected());
+        assertNotNull(response.getData());
+        assertEquals(2, response.getData().size());
+    }
+
+    @Test
     void updateById_whenPresent_updatesAndSaves() {
         RepoHarness harness = new RepoHarness();
         StockIndexRecord existing = new StockIndexRecord();
@@ -214,7 +278,7 @@ class StockIndexServiceImplTest {
         updated.setClose(10.5);
         updated.setVolume(123L);
 
-        StockIndexResponse<StockIndexRecord> response = service.updateById(42L, updated);
+        StockIndexResponse<Object> response = service.updateById(42L, updated);
 
         assertEquals("SUCCESS", response.getStatus());
         assertEquals(1, response.getRowsAffected());
@@ -224,19 +288,29 @@ class StockIndexServiceImplTest {
     }
 
     @Test
-    void updateById_whenMissing_throwsEntityNotFound() {
+    void updateById_whenMissing_returnsSuccessNoRows() {
         RepoHarness harness = new RepoHarness();
         StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
 
-        assertThrows(EntityNotFoundException.class, () -> service.updateById(999L, new StockIndexRecord()));
+        StockIndexResponse<Object> response = service.updateById(999L, new StockIndexRecord());
+        assertEquals("SUCCESS", response.getStatus());
+        assertEquals(0, response.getRowsAffected());
+        assertEquals("No stock record found with id: 999", response.getMessage());
+        assertNotNull(response.getData());
+        assertEquals(new ErrorResult("NO_RECORD_FOUND", "No stock record found with id: 999"), response.getData());
     }
 
     @Test
-    void deleteById_whenMissing_throwsEntityNotFound() {
+    void deleteById_whenMissing_returnsSuccessNoRows() {
         RepoHarness harness = new RepoHarness();
         StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
 
-        assertThrows(EntityNotFoundException.class, () -> service.deleteById(999L));
+        StockIndexResponse<DeleteResult> response = service.deleteById(999L);
+        assertEquals("SUCCESS", response.getStatus());
+        assertEquals(0, response.getRowsAffected());
+        assertEquals("No stock record found with id: 999", response.getMessage());
+        assertNotNull(response.getData());
+        assertEquals(999L, response.getData().deletedId());
     }
 
     @Test
@@ -248,34 +322,42 @@ class StockIndexServiceImplTest {
 
         StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
 
-        StockIndexResponse<Void> response = service.deleteById(42L);
+        StockIndexResponse<DeleteResult> response = service.deleteById(42L);
 
         assertEquals("SUCCESS", response.getStatus());
         assertEquals(1, response.getRowsAffected());
+        assertNotNull(response.getData());
+        assertEquals(42L, response.getData().deletedId());
         assertEquals(1, harness.deleteByIdCalls);
         assertNull(harness.store.get(42L));
     }
 
     @Test
-    void bulkDeleteByIds_whenEmpty_returnsFailed() {
+    void bulkDeleteByIds_whenEmpty_returnsSuccessWithErrorResult() {
         RepoHarness harness = new RepoHarness();
         StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
 
-        StockIndexResponse<Void> response = service.bulkDeleteByIds(List.of());
+        StockIndexResponse<Object> response = service.bulkDeleteByIds(List.of());
 
-        assertEquals("FAILED", response.getStatus());
+        assertEquals("SUCCESS", response.getStatus());
         assertEquals(0, response.getRowsAffected());
+        assertEquals(new ErrorResult("INVALID_REQUEST", "No ids provided"), response.getData());
     }
 
     @Test
-    void bulkDeleteByIds_whenAnyMissing_throwsEntityNotFound() {
+    void bulkDeleteByIds_whenAnyMissing_returnsSuccessWithErrorResultAndDoesNotDelete() {
         RepoHarness harness = new RepoHarness();
         StockIndexRecord existing = new StockIndexRecord();
         existing.setId(1L);
         harness.store.put(1L, existing);
         StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
 
-        assertThrows(EntityNotFoundException.class, () -> service.bulkDeleteByIds(List.of(1L, 2L)));
+        StockIndexResponse<Object> response = service.bulkDeleteByIds(List.of(1L, 2L));
+
+        assertEquals("SUCCESS", response.getStatus());
+        assertEquals(0, response.getRowsAffected());
+        assertEquals(new ErrorResult("STOCK_IDS_NOT_FOUND", "Stock record(s) not found for id(s): [2]"), response.getData());
+        assertNotNull(harness.store.get(1L));
     }
 
     @Test
@@ -295,10 +377,11 @@ class StockIndexServiceImplTest {
         ids.add(2L);
         ids.add(2L);
         ids.add(null);
-        StockIndexResponse<Void> response = service.bulkDeleteByIds(ids);
+        StockIndexResponse<Object> response = service.bulkDeleteByIds(ids);
 
         assertEquals("SUCCESS", response.getStatus());
         assertEquals(2, response.getRowsAffected());
+        assertEquals(new BulkDeleteResult(List.of(1L, 2L), 2), response.getData());
         assertNull(harness.store.get(1L));
         assertNull(harness.store.get(2L));
     }
@@ -322,9 +405,7 @@ class StockIndexServiceImplTest {
         assertEquals(2, response.getTotalRows());
         assertEquals(1, response.getInsertedRows());
         assertNotNull(response.getFailedRowRecords());
-        assertEquals(1, harness.saveAllCalls);
-        assertNotNull(harness.lastSaveAllArgument);
-        assertEquals(1, harness.lastSaveAllArgument.size());
+        assertEquals(1, harness.saveCalls);
     }
 
     @Test
@@ -348,6 +429,53 @@ class StockIndexServiceImplTest {
         assertEquals(1, harness.saveCalls);
         assertNotNull(response.getFailures());
         assertEquals(1, response.getFailures().size());
+    }
+
+    @Test
+    void processUpload_csv_skipsDuplicateStockDateWithinUpload_andInsertsOthers() throws Exception {
+        RepoHarness harness = new RepoHarness();
+        StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
+
+        String header = "quarter,stock,date,open,high,low,close,volume,percent_change_price," +
+                "percent_change_volume_over_last_wk,previous_weeks_volume,next_weeks_open,next_weeks_close," +
+                "percent_change_next_weeks_price,days_to_next_dividend,percent_return_next_dividend\n";
+        String rowA = "1,AA,1/27/2011,$16.71,$16.71,$15.64,$15.97,242963398,-4.42849," +
+                "1.380223,239655616,$15.87,$16.13,1.63803,19,0.187852\n";
+        String rowADupe = rowA;
+        String rowB = "1,BB,1/28/2011,$16.71,$16.71,$15.64,$15.97,242963398,-4.42849," +
+                "1.380223,239655616,$15.87,$16.13,1.63803,19,0.187852\n";
+        byte[] csvBytes = (header + rowA + "\n" + rowADupe + rowB + "\n\n").getBytes();
+
+        MultipartFile csv = new StubMultipartFile("file", "stock.csv", "text/csv", csvBytes);
+        FileUploadResponse response = service.processUpload(csv);
+
+        assertEquals(3, response.getTotalRows());
+        assertEquals(2, response.getInsertedRows());
+        assertEquals(1, response.getFailedRows());
+        assertNotNull(response.getFailedRowRecords());
+        assertEquals(2, harness.saveCalls);
+    }
+
+    @Test
+    void processUpload_excel_skipsDuplicateStockDateWithinUpload_andInsertsOthers() throws Exception {
+        RepoHarness harness = new RepoHarness();
+        StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
+
+        byte[] xlsx = excelBytesWithDuplicateStockDateAndOneOther();
+        MultipartFile excel = new StubMultipartFile(
+                "file",
+                "stock.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                xlsx
+        );
+
+        FileUploadResponse response = service.processUpload(excel);
+
+        assertEquals(3, response.getTotalRows());
+        assertEquals(2, response.getInsertedRows());
+        assertEquals(1, response.getFailedRows());
+        assertNotNull(response.getFailedRowRecords());
+        assertEquals(2, harness.saveCalls);
     }
 
     @Test
@@ -401,6 +529,62 @@ class StockIndexServiceImplTest {
             invalid.createCell(13, CellType.STRING).setCellValue("1.63803");
             invalid.createCell(14, CellType.NUMERIC).setCellValue(19);
             invalid.createCell(15, CellType.STRING).setCellValue("0.187852");
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            workbook.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static byte[] excelBytesWithDuplicateStockDateAndOneOther() throws IOException {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("Sheet1");
+
+            Row header = sheet.createRow(0);
+            for (int i = 0; i < 16; i++) header.createCell(i, CellType.STRING).setCellValue("h" + i);
+
+            Row a = sheet.createRow(1);
+            a.createCell(0, CellType.NUMERIC).setCellValue(1);
+            a.createCell(1, CellType.STRING).setCellValue("AA");
+            a.createCell(2, CellType.STRING).setCellValue("1/27/2011");
+            a.createCell(3, CellType.STRING).setCellValue("$16.71");
+            a.createCell(4, CellType.STRING).setCellValue("$16.71");
+            a.createCell(5, CellType.STRING).setCellValue("$15.64");
+            a.createCell(6, CellType.STRING).setCellValue("$15.97");
+            a.createCell(7, CellType.NUMERIC).setCellValue(242963398);
+            a.createCell(8, CellType.STRING).setCellValue("-4.42849");
+            a.createCell(9, CellType.STRING).setCellValue("1.380223");
+            a.createCell(10, CellType.STRING).setCellValue("239655616");
+            a.createCell(11, CellType.STRING).setCellValue("$15.87");
+            a.createCell(12, CellType.STRING).setCellValue("$16.13");
+            a.createCell(13, CellType.STRING).setCellValue("1.63803");
+            a.createCell(14, CellType.NUMERIC).setCellValue(19);
+            a.createCell(15, CellType.STRING).setCellValue("0.187852");
+
+            Row aDup = sheet.createRow(2);
+            for (int i = 0; i < 16; i++) {
+                aDup.createCell(i, a.getCell(i).getCellType()).setCellValue(a.getCell(i).toString());
+            }
+
+            Row b = sheet.createRow(3);
+            b.createCell(0, CellType.NUMERIC).setCellValue(1);
+            b.createCell(1, CellType.STRING).setCellValue("BB");
+            b.createCell(2, CellType.STRING).setCellValue("1/28/2011");
+            b.createCell(3, CellType.STRING).setCellValue("$16.71");
+            b.createCell(4, CellType.STRING).setCellValue("$16.71");
+            b.createCell(5, CellType.STRING).setCellValue("$15.64");
+            b.createCell(6, CellType.STRING).setCellValue("$15.97");
+            b.createCell(7, CellType.NUMERIC).setCellValue(242963398);
+            b.createCell(8, CellType.STRING).setCellValue("-4.42849");
+            b.createCell(9, CellType.STRING).setCellValue("1.380223");
+            b.createCell(10, CellType.STRING).setCellValue("239655616");
+            b.createCell(11, CellType.STRING).setCellValue("$15.87");
+            b.createCell(12, CellType.STRING).setCellValue("$16.13");
+            b.createCell(13, CellType.STRING).setCellValue("1.63803");
+            b.createCell(14, CellType.NUMERIC).setCellValue(19);
+            b.createCell(15, CellType.STRING).setCellValue("0.187852");
+
+            sheet.createRow(751);
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             workbook.write(out);

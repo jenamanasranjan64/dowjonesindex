@@ -21,7 +21,7 @@ public interface StockRepository extends JpaRepository<StockIndexRecord, Long> {
     boolean existsById(Long id);
 
     // 🔹 OPTIONAL: FIND BY STOCK NAME
-   // List<StockIndexRecord> findByStock(String stock);
+    List<StockIndexRecord> findByStock(String stock);
     @Transactional
     @Modifying
     @Query("""

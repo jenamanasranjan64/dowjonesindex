@@ -11,7 +11,6 @@ public class FileUploadValidationException extends RuntimeException{
         this.columnName = columnName;
         this.invalidValue = invalidValue;
     }
-
     public int getRowNumber() {
         return rowNumber;
     }
