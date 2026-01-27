@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -464,6 +465,28 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
             );
         }
         StockIndexRecord existing = existingOpt.get();
+        if (isAlreadyUpdated(existing, updated)) {
+            return new StockIndexResponse<>(
+                    "SUCCESS",
+                    "Duplicate record is not allowed for the given id",
+                    0,
+                    new ErrorResult(ErrorCodes.DUPLICATE_RECORD, "Record is already updated for the given id: " + id)
+            );
+        }
+        if (updated != null
+                && updated.getStock() != null
+                && updated.getDate() != null
+                && stockRepository.existsByStockAndDateAndIdNot(updated.getStock(), updated.getDate(), id)) {
+            return new StockIndexResponse<>(
+                    "SUCCESS",
+                    "Duplicate record is not allowed",
+                    0,
+                    new ErrorResult(
+                            ErrorCodes.DUPLICATE_RECORD,
+                            "Duplicate stock/date already exists: " + updated.getStock() + "/" + updated.getDate()
+                    )
+            );
+        }
         existing.setQuarter(updated.getQuarter());
         existing.setStock(updated.getStock());
         existing.setDate(updated.getDate());
@@ -479,6 +502,18 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                 1,
                 stockIndexRecordUpdated
         );
+    }
+
+    private static boolean isAlreadyUpdated(StockIndexRecord existing, StockIndexRecord updated) {
+        if (existing == null || updated == null) return false;
+        return Objects.equals(existing.getQuarter(), updated.getQuarter())
+                && Objects.equals(existing.getStock(), updated.getStock())
+                && Objects.equals(existing.getDate(), updated.getDate())
+                && Objects.equals(existing.getOpen(), updated.getOpen())
+                && Objects.equals(existing.getHigh(), updated.getHigh())
+                && Objects.equals(existing.getLow(), updated.getLow())
+                && Objects.equals(existing.getClose(), updated.getClose())
+                && Objects.equals(existing.getVolume(), updated.getVolume());
     }
     /**
      * Deletes a record by id.

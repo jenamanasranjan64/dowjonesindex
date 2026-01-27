@@ -1,7 +1,4 @@
 package com.stock.dowjonesindex.util;
-
-
-
 import java.util.ArrayList;
 import java.util.List;
 public class FileUploadResponse {

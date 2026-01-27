@@ -4,6 +4,7 @@ import com.stock.dowjonesindex.model.StockIndexRecord;
 import com.stock.dowjonesindex.repository.StockRepository;
 import com.stock.dowjonesindex.util.BulkDeleteResult;
 import com.stock.dowjonesindex.util.DeleteResult;
+import com.stock.dowjonesindex.util.ErrorCodes;
 import com.stock.dowjonesindex.util.ErrorResult;
 import com.stock.dowjonesindex.util.FileUploadResponse;
 import com.stock.dowjonesindex.util.StockIndexResponse;
@@ -129,6 +130,22 @@ class StockIndexServiceImplTest {
                     if (name.equals("existsById")) {
                         Long id = (Long) args[0];
                         return store.containsKey(id);
+                    }
+                    if (name.equals("existsByStockAndDateAndIdNot")) {
+                        String stock = (String) args[0];
+                        LocalDate date = (LocalDate) args[1];
+                        Long excludedId = (Long) args[2];
+                        for (StockIndexRecord r : store.values()) {
+                            if (r == null) continue;
+                            if (excludedId != null && excludedId.equals(r.getId())) continue;
+                            if (stock != null
+                                    && stock.equals(r.getStock())
+                                    && date != null
+                                    && date.equals(r.getDate())) {
+                                return true;
+                            }
+                        }
+                        return false;
                     }
                     if (name.equals("deleteById")) {
                         deleteByIdCalls++;
@@ -298,6 +315,85 @@ class StockIndexServiceImplTest {
         assertEquals("No stock record found with id: 999", response.getMessage());
         assertNotNull(response.getData());
         assertEquals(new ErrorResult("NO_RECORD_FOUND", "No stock record found with id: 999"), response.getData());
+    }
+
+    @Test
+    void updateById_whenAlreadyUpdated_returnsDuplicateNotAllowed_andDoesNotSave() {
+        RepoHarness harness = new RepoHarness();
+        StockIndexRecord existing = new StockIndexRecord();
+        existing.setId(42L);
+        existing.setQuarter(2);
+        existing.setStock("AA");
+        existing.setDate(LocalDate.of(2011, 1, 14));
+        existing.setOpen(10.0);
+        existing.setHigh(11.0);
+        existing.setLow(9.0);
+        existing.setClose(10.5);
+        existing.setVolume(123L);
+        harness.store.put(42L, existing);
+
+        StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
+
+        StockIndexRecord updated = new StockIndexRecord();
+        updated.setQuarter(2);
+        updated.setStock("AA");
+        updated.setDate(LocalDate.of(2011, 1, 14));
+        updated.setOpen(10.0);
+        updated.setHigh(11.0);
+        updated.setLow(9.0);
+        updated.setClose(10.5);
+        updated.setVolume(123L);
+
+        StockIndexResponse<Object> response = service.updateById(42L, updated);
+
+        assertEquals("SUCCESS", response.getStatus());
+        assertEquals(0, response.getRowsAffected());
+        assertEquals("Duplicate record is not allowed for the given id", response.getMessage());
+        assertEquals(0, harness.saveCalls);
+        assertEquals(
+                new ErrorResult(ErrorCodes.DUPLICATE_RECORD, "Record is already updated for the given id: 42"),
+                response.getData()
+        );
+    }
+
+    @Test
+    void updateById_whenWouldDuplicateStockDateForDifferentId_returnsDuplicateNotAllowed_andDoesNotSave() {
+        RepoHarness harness = new RepoHarness();
+
+        StockIndexRecord record1 = new StockIndexRecord();
+        record1.setId(1L);
+        record1.setStock("AA");
+        record1.setDate(LocalDate.of(2011, 1, 14));
+        harness.store.put(1L, record1);
+
+        StockIndexRecord record2 = new StockIndexRecord();
+        record2.setId(2L);
+        record2.setStock("BB");
+        record2.setDate(LocalDate.of(2011, 1, 15));
+        harness.store.put(2L, record2);
+
+        StockIndexServiceImpl service = new StockIndexServiceImpl(harness.repo);
+
+        StockIndexRecord updated = new StockIndexRecord();
+        updated.setQuarter(1);
+        updated.setStock("AA");
+        updated.setDate(LocalDate.of(2011, 1, 14));
+        updated.setOpen(10.0);
+        updated.setHigh(11.0);
+        updated.setLow(9.0);
+        updated.setClose(10.5);
+        updated.setVolume(123L);
+
+        StockIndexResponse<Object> response = service.updateById(2L, updated);
+
+        assertEquals("SUCCESS", response.getStatus());
+        assertEquals(0, response.getRowsAffected());
+        assertEquals("Duplicate record is not allowed", response.getMessage());
+        assertEquals(0, harness.saveCalls);
+        assertEquals(
+                new ErrorResult(ErrorCodes.DUPLICATE_RECORD, "Duplicate stock/date already exists: AA/2011-01-14"),
+                response.getData()
+        );
     }
 
     @Test

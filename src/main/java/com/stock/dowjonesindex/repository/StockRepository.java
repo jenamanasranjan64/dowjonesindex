@@ -22,6 +22,8 @@ public interface StockRepository extends JpaRepository<StockIndexRecord, Long> {
 
     // 🔹 OPTIONAL: FIND BY STOCK NAME
     List<StockIndexRecord> findByStock(String stock);
+
+    boolean existsByStockAndDateAndIdNot(String stock, LocalDate date, Long id);
     @Transactional
     @Modifying
     @Query("""

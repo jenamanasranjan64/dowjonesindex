@@ -344,6 +344,37 @@ class StockIndexControllerTest {
     }
 
     @Test
+    void updateById_whenDuplicate_returns200_andDuplicateNotAllowedBody() throws Exception {
+        StubStockIndexService service = new StubStockIndexService();
+        StockIndexController controller = controllerWithService(service);
+
+        StockIndexUpdateRequest request = new StockIndexUpdateRequest(
+                String.valueOf(2),
+                "AA",
+                "1/05/2015",
+                String.valueOf(16.71),
+                String.valueOf(16.71),
+                String.valueOf(15.64),
+                String.valueOf(15.97),
+                String.valueOf(242963398L)
+        );
+
+        StockIndexResponse<Object> serviceResponse = new StockIndexResponse<>(
+                "SUCCESS",
+                "Duplicate record is not allowed for the given id",
+                0,
+                new ErrorResult(ErrorCodes.DUPLICATE_RECORD, "Record is already updated for the given id: 42")
+        );
+        service.updateResponse = serviceResponse;
+
+        ResponseEntity<StockIndexResponse<Object>> response = controller.updateById(42L, request);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(serviceResponse, response.getBody());
+        assertEquals(1, service.updateByIdCalls);
+    }
+
+    @Test
     void deleteById_returns200_andDelegatesToService() throws Exception {
         StubStockIndexService service = new StubStockIndexService();
         StockIndexController controller = controllerWithService(service);
