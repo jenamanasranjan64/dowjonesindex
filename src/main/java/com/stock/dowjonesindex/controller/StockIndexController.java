@@ -137,7 +137,7 @@ public class StockIndexController {
      * @param id record id
      * @return JSON response containing a {@link StockIndexRecord} or an {@link ErrorResult} when not found
      */
-    @GetMapping("/{id:\\d+}")
+    @GetMapping("/id/{id:\\d+}")
     public ResponseEntity<StockIndexResponse<Object>> getById(@PathVariable Long id) {
         Optional<StockIndexRecord> record = stockIndexServiceInterFace.findById(id);
         if (record.isEmpty()) {
@@ -164,7 +164,7 @@ public class StockIndexController {
      * @param stock stock symbol (route only matches non-numeric identifiers)
      * @return JSON response containing a list of matching {@link StockIndexRecord}
      */
-    @GetMapping("/{stock:[A-Za-z][A-Za-z0-9._-]*}")
+    @GetMapping("/stock/{stock:[A-Za-z][A-Za-z0-9._-]*}")
     public ResponseEntity<StockIndexResponse<List<StockIndexRecord>>> getByStock(@PathVariable String stock) {
         StockIndexResponse<List<StockIndexRecord>> response = stockIndexServiceInterFace.findByStock(stock);
         return ResponseEntity.ok(response);
@@ -182,7 +182,7 @@ public class StockIndexController {
      * @param updated validated request body
      * @return JSON response containing updated record or an {@link ErrorResult} when not found/invalid
      */
-    @PutMapping("/{id}")
+    @PutMapping("/id/{id}")
     public ResponseEntity<StockIndexResponse<Object>> updateById(@PathVariable Long id,
             @Valid @RequestBody StockIndexUpdateRequest updated) {
         StockIndexRecord mapped = new StockIndexRecord();
