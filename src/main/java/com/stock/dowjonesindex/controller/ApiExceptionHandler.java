@@ -22,6 +22,13 @@ public class ApiExceptionHandler {
     private static final String STOCK_UPDATE_TYPE_DETAIL =
             "open/high/low/close must be numbers; quarter must be integer; volume must be integer; date must match M/dd/yyyy";
 
+    /**
+     * Converts bean-validation errors (e.g. {@code @NotBlank}, {@code @Pattern}, custom validators) into a consistent
+     * JSON payload. This project returns HTTP 200 for validation errors and exposes per-field messages.
+     *
+     * @param ex validation exception thrown by Spring MVC during request binding/validation
+     * @return JSON response containing {@link ValidationErrorResult}
+     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<StockIndexResponse<ValidationErrorResult>> handleValidation(MethodArgumentNotValidException ex) {
         Map<String, List<String>> fieldErrors = new LinkedHashMap<>();
@@ -47,6 +54,12 @@ public class ApiExceptionHandler {
         );
     }
 
+    /**
+     * Handles malformed JSON or type mismatches while parsing the request body and returns a consistent JSON payload.
+     *
+     * @param ex thrown when JSON cannot be parsed into the expected request type
+     * @return JSON response containing {@link ValidationErrorResult}
+     */
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<StockIndexResponse<ValidationErrorResult>> handleNotReadable(HttpMessageNotReadableException ex) {
         Map<String, List<String>> fieldErrors = new LinkedHashMap<>();
@@ -63,6 +76,12 @@ public class ApiExceptionHandler {
         );
     }
 
+    /**
+     * Handles numeric parsing errors when mapping request strings into numeric fields.
+     *
+     * @param ex number format exception
+     * @return JSON response containing {@link ValidationErrorResult}
+     */
     @ExceptionHandler(NumberFormatException.class)
     public ResponseEntity<StockIndexResponse<ValidationErrorResult>> handleNumberFormat(NumberFormatException ex) {
         Map<String, List<String>> fieldErrors = new LinkedHashMap<>();

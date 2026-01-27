@@ -26,6 +26,14 @@ import java.util.Optional;
 import java.util.Set;
 
 @Service
+/**
+ * Service implementation for stock index operations.
+ * <p>
+ * Responsibilities:
+ * - CRUD-style operations used by the REST controller.
+ * - CSV/XLSX upload parsing, row-level validation, and persistence.
+ * - Duplicate (stock,date) handling so valid rows are inserted while duplicates are reported as row errors.
+ */
 public class StockIndexServiceImpl implements StockIndexServiceInterFace {
     private final StockRepository stockRepository;
     private static final DataFormatter EXCEL_FORMATTER = new DataFormatter(Locale.US);
@@ -33,6 +41,15 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         this.stockRepository = stockRepository;
     }
 
+    /**
+     * Processes a user-uploaded file and persists valid records.
+     * <p>
+     * Supported formats: {@code .csv} and {@code .xlsx}. The method prefers file extension routing (from
+     * {@link MultipartFile#getOriginalFilename()}) and falls back to content-type when needed.
+     *
+     * @param multipartFile upload file
+     * @return upload summary including inserted/failed counts and per-row error details
+     */
     @Override
     public FileUploadResponse processUpload(MultipartFile multipartFile) throws Exception {
         String fileName = multipartFile.getOriginalFilename();
@@ -58,6 +75,12 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         throw new IllegalArgumentException("Unsupported file type; only .csv and .xlsx are supported");
     }
 
+    /**
+     * Extracts and normalizes the file extension.
+     *
+     * @param fileName original filename
+     * @return extension without dot (lower-cased) or empty string when missing
+     */
     private static String fileExtension(String fileName) {
         if (fileName == null) return "";
         int dot = fileName.lastIndexOf('.');
@@ -65,6 +88,16 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return fileName.substring(dot + 1).trim().toLowerCase(Locale.ROOT);
     }
 
+    /**
+     * Parses an XLSX stream, validates each row, and persists non-duplicate rows.
+     * <p>
+     * - Skips the header row (row 1).
+     * - Skips fully-empty rows (common with formatted but empty Excel sheets).
+     * - Collects validation issues into both {@code failures} and {@code failedRowRecords}.
+     *
+     * @param inputStream XLSX input stream
+     * @return upload summary
+     */
     FileUploadResponse parseExcel(InputStream inputStream) throws IOException {
         FileUploadResponse fileUploadResponse = new FileUploadResponse();
         List<FailedRowRecord> failedRowRecords = new ArrayList<>();
@@ -122,6 +155,12 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
             return fileUploadResponse;
         }
     }
+    /**
+     * Attempts to parse a date value using supported formats.
+     *
+     * @param value date string (may be null/blank)
+     * @return parsed date or {@code null} when invalid/blank
+     */
     public  LocalDate safeParseDate(String value) {
 
         if (value == null || value.isBlank()) return null;
@@ -141,6 +180,12 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
 
         return null; // invalid date
     }
+    /**
+     * Validates and maps an Excel row into a {@link StockIndexRecord}.
+     * <p>
+     * Validation errors are recorded in {@link RowFailure#columnErrors}. Callers should check
+     * {@code columnErrors.isEmpty()} before persisting.
+     */
     private StockIndexRecord parseAndValidate(Row row, RowFailure failure) {
         StockIndexRecord stockIndexRecord = new StockIndexRecord();
         // quarter
@@ -205,6 +250,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return stockIndexRecord;
     }
 
+    /**
+     * Reads the raw cell value for a given domain column name, used for error reporting.
+     */
     private static String valueForExcelColumn(Row row, String column) {
         int index = switch (column) {
             case "quarter" -> 0;
@@ -234,15 +282,24 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return value.isEmpty() ? null : value;
     }
 
+    /**
+     * Normalizes numeric strings (e.g. removes {@code $} and {@code ,}) before parsing.
+     */
     private static String sanitizeNumeric(String raw) {
         if (raw == null) return null;
         return raw.replace("$", "").replace(",", "").trim();
     }
 
+    /**
+     * Returns true when a value is null/blank after trimming.
+     */
     private static boolean isBlankCell(String value) {
         return value == null || value.trim().isEmpty();
     }
 
+    /**
+     * Reads an Excel cell as a trimmed string using {@link DataFormatter}; returns null for empty cells.
+     */
     private static String getCellString(Row row, int index) {
         if (row == null) return null;
         Cell cell = row.getCell(index);
@@ -253,6 +310,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return value.isEmpty() ? null : value;
     }
 
+    /**
+     * Reads a required String cell; records an error when missing/blank.
+     */
     private String getRequiredString(Row row, int index, String col, RowFailure f) {
         String value = getCellString(row, index);
         if (isBlankCell(value)) {
@@ -262,6 +322,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return value;
     }
 
+    /**
+     * Reads a required integer cell; records an error when missing/blank/invalid.
+     */
     private Integer getRequiredInt(Row row, int index, String col, RowFailure f) {
         String raw = getCellString(row, index);
         if (isBlankCell(raw)) {
@@ -278,6 +341,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         }
     }
 
+    /**
+     * Reads a required long cell; records an error when missing/blank/invalid.
+     */
     private Long getRequiredLong(Row row, int index, String col, RowFailure f) {
         String raw = getCellString(row, index);
         if (isBlankCell(raw)) {
@@ -294,6 +360,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         }
     }
 
+    /**
+     * Reads a required decimal cell; records an error when missing/blank/invalid.
+     */
     private Double getRequiredDecimal(Row row, int index, String col, RowFailure f) {
         String raw = getCellString(row, index);
         if (isBlankCell(raw)) {
@@ -308,6 +377,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         }
     }
 
+    /**
+     * Reads an optional decimal cell; returns null when blank, otherwise records an error when invalid.
+     */
     private Double getOptionalDecimal(Row row, int index, String col, RowFailure f) {
         String raw = getCellString(row, index);
         if (isBlankCell(raw)) return null;
@@ -319,6 +391,11 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         }
     }
 
+    /**
+     * Fetches all stored stock records.
+     *
+     * @return response containing all records (or empty list) and a row count
+     */
     @Override
     public StockIndexResponse<List<StockIndexRecord>> getAllStocks() {
         List<StockIndexRecord> stockIndexRecordList = stockRepository.findAll();
@@ -336,11 +413,23 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                 stockIndexRecordList.size(),stockIndexRecordList);
     }
 
+    /**
+     * Finds a single record by id.
+     *
+     * @param id record id
+     * @return optional record
+     */
     @Override
     public Optional<StockIndexRecord> findById(Long id) {
         return stockRepository.findById(id);
     }
 
+    /**
+     * Finds all records matching a stock ticker.
+     *
+     * @param stock stock ticker
+     * @return response containing matching records (or empty list)
+     */
     @Override
     public StockIndexResponse<List<StockIndexRecord>> findByStock(String stock) {
         if (stock == null || stock.isBlank()) {
@@ -353,6 +442,15 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return new StockIndexResponse<>("SUCCESS", "Stock Record fetched successfully", records.size(), records);
     }
 
+    /**
+     * Updates a record by id.
+     * <p>
+     * When no record exists for the id, returns a success response with {@link ErrorResult} in {@code data}.
+     *
+     * @param id      record id
+     * @param updated updated values
+     * @return response containing the updated record or an {@link ErrorResult}
+     */
     @Override
     public StockIndexResponse<Object> updateById(Long id, StockIndexRecord updated) {
         Optional<StockIndexRecord> existingOpt = stockRepository.findById(id);
@@ -382,6 +480,14 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                 stockIndexRecordUpdated
         );
     }
+    /**
+     * Deletes a record by id.
+     * <p>
+     * Always returns a success response. When id does not exist, rowsAffected is 0 and data includes the requested id.
+     *
+     * @param id record id
+     * @return response containing {@link DeleteResult}
+     */
     @Override
     public StockIndexResponse<DeleteResult> deleteById(Long id) {
         if (!stockRepository.existsById(id)) {
@@ -400,6 +506,14 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                 new DeleteResult(id)
         );
     }
+    /**
+     * Deletes multiple records by ids.
+     * <p>
+     * Always returns a success response. Missing/invalid ids are returned as an {@link ErrorResult} in {@code data}.
+     *
+     * @param ids list of ids (may be null/empty)
+     * @return response containing {@link BulkDeleteResult} or {@link ErrorResult}
+     */
     @Override
     public StockIndexResponse<Object> bulkDeleteByIds(List<Long> ids) {
         if (ids == null || ids.isEmpty()) {
@@ -446,6 +560,13 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                 new BulkDeleteResult(new ArrayList<>(existingIds), existingIds.size())
         );
     }
+    /**
+     * Parses a CSV upload, validates each row, and inserts non-duplicate rows.
+     * <p>
+     * - Skips the header (skipLines=1)
+     * - Skips fully-empty trailing lines
+     * - Collects per-row/per-column validation failures in {@link FailedRowRecord}
+     */
     public FileUploadResponse parseCSV(MultipartFile multipartFile) throws IOException {
         StockIndexRecord stockIndexRecord = null;
         List<FailedRowRecord> failedRows = new ArrayList<>();
@@ -513,6 +634,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         fileUploadResponse.setFailedRowRecords(failedRows);
         return fileUploadResponse;
     }
+    /**
+     * Maps a validated CSV DTO into a {@link StockIndexRecord}.
+     */
     private StockIndexRecord mapToEntity(StockIndexCsvDto stockIndexCsvDto) {
         LocalDate stockIndexDate = LocalDate.parse(stockIndexCsvDto.getDate(),DateTimeFormatter.ofPattern("M/d/yyyy"));
         StockIndexRecord stockIndexRecord = new StockIndexRecord();
@@ -535,19 +659,32 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return stockIndexRecord;
     }
 
+    /**
+     * Parses a required money/decimal string (e.g. {@code $16.71}).
+     */
     private double parseDouble(String value) {
         return Double.parseDouble(value.replace("$", "").trim());
     }
+
+    /**
+     * Parses an optional money/decimal string; returns null when blank.
+     */
     private Double parseNullableDouble(String value) {
         if (value == null || value.trim().isEmpty()) return null;
         return Double.parseDouble(value.replace("$", "").trim());
     }
 
+    /**
+     * Parses an optional long string; returns null when blank.
+     */
     private Long parseNullableLong(String value) {
         if (value == null || value.trim().isEmpty()) return null;
         return Long.parseLong(value.trim());
     }
 
+    /**
+     * Validates a CSV row and returns per-field failures with row/column context.
+     */
     private List<FailedRowRecord> validateRow(StockIndexCsvDto stockIndexCsvDto, int rowNum) {
 
         List<FailedRowRecord> errors = new ArrayList<>();
@@ -706,18 +843,32 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                     "Invalid decimal number"));
         }
     }
+
+    /**
+     * Null/blank/space check for CSV values.
+     */
     private boolean isBlank(String v) {
         return v == null || v.trim().isEmpty();
     }
+
+    /**
+     * Builds a {@link FailedRowRecord} for a specific row/column.
+     */
     private FailedRowRecord err(int row, String col, String val, String msg) {
         return new FailedRowRecord(row, col, val, msg);
     }
 
+    /**
+     * Builds a unique key for the (stock,date) uniqueness constraint.
+     */
     private static String stockDateKey(StockIndexRecord record) {
         if (record == null || record.getStock() == null || record.getDate() == null) return null;
         return record.getStock().trim() + "-" + record.getDate();
     }
 
+    /**
+     * Detects whether an exception indicates a duplicate key (stock,date) violation.
+     */
     private static boolean isDuplicateStockDateException(Throwable t) {
         Throwable cur = t;
         while (cur != null) {
@@ -732,6 +883,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return false;
     }
 
+    /**
+     * Attempts to reconstruct a user-friendly (stock,date) key from an Excel row for error reporting.
+     */
     private static String stockDateKeyFromRow(Row row) {
         String stock = getCellString(row, 1);
         String date = getCellString(row, 2);
@@ -754,6 +908,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return parsed == null ? (stock.trim() + "-" + date.trim()) : (stock.trim() + "-" + parsed);
     }
 
+    /**
+     * Returns true when all relevant columns are empty in an Excel row.
+     */
     private static boolean isExcelRowEmpty(Row row) {
         for (int i = 0; i <= 15; i++) {
             if (!isBlankCell(getCellString(row, i))) return false;
@@ -761,6 +918,9 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         return true;
     }
 
+    /**
+     * Returns true when a parsed CSV DTO represents a blank/trailing line.
+     */
     private boolean isCsvRowEmpty(StockIndexCsvDto dto) {
         if (dto == null) return true;
         if (dto.getQuarter() != 0) return false;

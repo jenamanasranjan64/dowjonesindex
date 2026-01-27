@@ -1,5 +1,4 @@
 package com.stock.dowjonesindex.controller;
-
 import com.stock.dowjonesindex.dto.StockIndexUpdateRequest;
 import com.stock.dowjonesindex.model.StockIndexRecord;
 import com.stock.dowjonesindex.service.StockIndexServiceInterFace;
@@ -27,6 +26,16 @@ public class StockIndexController {
     private StockIndexServiceInterFace stockIndexServiceInterFace;
     private static final DateTimeFormatter UPDATE_DATE_FORMAT =
             DateTimeFormatter.ofPattern("M/dd/uuuu", Locale.US).withResolverStyle(ResolverStyle.STRICT);
+
+    /**
+     * Uploads stock index data as a CSV or XLSX file and processes it row-by-row.
+     * <p>
+     * Returns a consistent JSON wrapper ({@link StockIndexResponse}) for both success and validation failures.
+     * When every data row is inserted successfully, the endpoint responds with HTTP 201.
+     *
+     * @param file multipart file containing CSV/XLSX data
+     * @return JSON response containing {@link FileUploadResponse} or an {@link ErrorResult}
+     */
     @PostMapping("/upload")
     public ResponseEntity<StockIndexResponse<Object>> uploadFile(@RequestParam("file") MultipartFile file) {
         if (file == null || file.isEmpty()) {
@@ -95,6 +104,11 @@ public class StockIndexController {
     // ========================
     // SELECT ALL
     // ========================
+    /**
+     * Fetches all stock records.
+     *
+     * @return JSON response containing a list of {@link StockIndexRecord}
+     */
     @GetMapping("/allStockRecord")
     public ResponseEntity<StockIndexResponse<List<StockIndexRecord>>> getAll() {
         try {
@@ -117,6 +131,12 @@ public class StockIndexController {
     // ========================
     // SELECT BY ID
     // ========================
+    /**
+     * Fetches a single stock record by numeric id.
+     *
+     * @param id record id
+     * @return JSON response containing a {@link StockIndexRecord} or an {@link ErrorResult} when not found
+     */
     @GetMapping("/{id:\\d+}")
     public ResponseEntity<StockIndexResponse<Object>> getById(@PathVariable Long id) {
         Optional<StockIndexRecord> record = stockIndexServiceInterFace.findById(id);
@@ -138,6 +158,12 @@ public class StockIndexController {
     // ========================
     // SELECT BY STOCK
     // ========================
+    /**
+     * Fetches records by stock symbol/ticker (e.g. AA, AAPL, BRK.B).
+     *
+     * @param stock stock symbol (route only matches non-numeric identifiers)
+     * @return JSON response containing a list of matching {@link StockIndexRecord}
+     */
     @GetMapping("/{stock:[A-Za-z][A-Za-z0-9._-]*}")
     public ResponseEntity<StockIndexResponse<List<StockIndexRecord>>> getByStock(@PathVariable String stock) {
         StockIndexResponse<List<StockIndexRecord>> response = stockIndexServiceInterFace.findByStock(stock);
@@ -146,6 +172,16 @@ public class StockIndexController {
     // ========================
     // UPDATE BY ID
     // ========================
+    /**
+     * Updates a stock record by id.
+     * <p>
+     * Request payload values are validated and parsed into domain types. The endpoint returns HTTP 200 even when
+     * the id is not found, using a non-null {@link ErrorResult} payload.
+     *
+     * @param id      record id
+     * @param updated validated request body
+     * @return JSON response containing updated record or an {@link ErrorResult} when not found/invalid
+     */
     @PutMapping("/{id}")
     public ResponseEntity<StockIndexResponse<Object>> updateById(@PathVariable Long id,
             @Valid @RequestBody StockIndexUpdateRequest updated) {
@@ -165,6 +201,14 @@ public class StockIndexController {
     // ========================
     // DELETE BY ID
     // ========================
+    /**
+     * Deletes a stock record by id.
+     * <p>
+     * Always returns HTTP 200 and returns a non-null {@link DeleteResult} in the response data.
+     *
+     * @param id record id
+     * @return JSON response containing {@link DeleteResult}
+     */
     @DeleteMapping("/deleteId/{id}")
     public ResponseEntity<StockIndexResponse<DeleteResult>> deleteById(@PathVariable Long id) {
         StockIndexResponse<DeleteResult> response = stockIndexServiceInterFace.deleteById(id);
@@ -173,6 +217,15 @@ public class StockIndexController {
     // ========================
     // BULK DELETE BY IDS
     // ========================
+    /**
+     * Deletes multiple records by ids.
+     * <p>
+     * Always returns HTTP 200. For invalid requests or missing ids, the response includes an {@link ErrorResult}
+     * payload describing the issue.
+     *
+     * @param ids list of ids to delete (may be null/empty)
+     * @return JSON response containing bulk delete result or an {@link ErrorResult}
+     */
     @DeleteMapping("/bulk-delete")
     public ResponseEntity<StockIndexResponse<Object>> bulkDeleteByIds(@RequestBody(required = false) List<Long> ids) {
         StockIndexResponse<Object> response = stockIndexServiceInterFace.bulkDeleteByIds(ids);
