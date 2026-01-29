@@ -9,6 +9,7 @@ import com.stock.dowjonesindex.util.FileUploadResponse;
 import com.stock.dowjonesindex.util.StockIndexResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -36,7 +37,7 @@ public class StockIndexController {
      * @param file multipart file containing CSV/XLSX data
      * @return JSON response containing {@link FileUploadResponse} or an {@link ErrorResult}
      */
-    @PostMapping("/upload")
+    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<StockIndexResponse<Object>> uploadFile(@RequestParam("file") MultipartFile file) {
         if (file == null || file.isEmpty()) {
             return ResponseEntity.ok(new StockIndexResponse<>(

@@ -399,7 +399,7 @@ class StockIndexControllerTest {
                 "SUCCESS",
                 "bulk deleted",
                 2,
-                new BulkDeleteResult(List.of(1L, 2L), 2)
+                new BulkDeleteResult(List.of(1L, 2L), 2, null, null)
         );
         service.bulkDeleteResponse = serviceResponse;
 
@@ -419,7 +419,7 @@ class StockIndexControllerTest {
                 "SUCCESS",
                 "Stock id(s) not found",
                 0,
-                new ErrorResult("STOCK_IDS_NOT_FOUND", "Stock record(s) not found for id(s): [2]")
+                new BulkDeleteResult(List.of(1L), 1, List.of(2L), 1)
         );
         service.bulkDeleteResponse = serviceResponse;
 

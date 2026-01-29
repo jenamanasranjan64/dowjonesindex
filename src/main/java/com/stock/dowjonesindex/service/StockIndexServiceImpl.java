@@ -118,7 +118,7 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                         if (duplicateKey != null && !seenStockDateKeys.add(duplicateKey)) {
                             failure.columnErrors.put("stock", "Duplicate stock/date in upload: " + duplicateKey);
                             fileUploadResponse.failedRows++;
-                            fileUploadResponse.failures.add(failure);
+                            //fileUploadResponse.getFailures().add(failure);
                             failedRowRecords.add(new FailedRowRecord(rowNumber, "stock", duplicateKey,
                                     "Duplicate stock/date in upload"));
                             continue;
@@ -127,7 +127,7 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                         fileUploadResponse.insertedRows++;
                     } else {
                         fileUploadResponse.failedRows++;
-                        fileUploadResponse.failures.add(failure);
+                      //  fileUploadResponse.getFailures().add(failure);
                         for (var entry : failure.columnErrors.entrySet()) {
                             String col = entry.getKey();
                             String msg = entry.getValue();
@@ -140,13 +140,13 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
                         String duplicateKey = stockDateKeyFromRow(row);
                         failure.columnErrors.put("stock", "Duplicate stock/date already exists: " + duplicateKey);
                         fileUploadResponse.failedRows++;
-                        fileUploadResponse.failures.add(failure);
+                       // fileUploadResponse.getFailures().add(failure);
                         failedRowRecords.add(new FailedRowRecord(rowNumber, "stock", duplicateKey,
                                 "Duplicate stock/date already exists"));
                     } else {
                         failure.columnErrors.put("row", e.getMessage());
                         fileUploadResponse.failedRows++;
-                        fileUploadResponse.failures.add(failure);
+                       // fileUploadResponse.getFailures().add(failure);
                         failedRowRecords.add(new FailedRowRecord(rowNumber, "row", null, e.getMessage()));
                     }
                 }
@@ -544,10 +544,10 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
     /**
      * Deletes multiple records by ids.
      * <p>
-     * Always returns a success response. Missing/invalid ids are returned as an {@link ErrorResult} in {@code data}.
+     * Always returns a success response. Any ids that exist are deleted; missing ids are returned in the response.
      *
      * @param ids list of ids (may be null/empty)
-     * @return response containing {@link BulkDeleteResult} or {@link ErrorResult}
+     * @return response containing {@link BulkDeleteResult} or {@link ErrorResult} for invalid request
      */
     @Override
     public StockIndexResponse<Object> bulkDeleteByIds(List<Long> ids) {
@@ -579,20 +579,36 @@ public class StockIndexServiceImpl implements StockIndexServiceInterFace {
         }
         Set<Long> missing = new LinkedHashSet<>(requested);
         missing.removeAll(existingIds);
-        if (!missing.isEmpty()) {
-            return new StockIndexResponse<>(
-                    "SUCCESS",
-                    "Stock id(s) not found",
-                    0,
-                    new ErrorResult(ErrorCodes.STOCK_IDS_NOT_FOUND, "Stock record(s) not found for id(s): " + missing)
-            );
+        if (!existingIds.isEmpty()) {
+            stockRepository.deleteAllById(existingIds);
         }
-        stockRepository.deleteAllById(existingIds);
+
+        List<Long> deletedIds = new ArrayList<>(existingIds);
+        List<Long> notFoundIds = new ArrayList<>(missing);
+        int deletedCount = deletedIds.size();
+        int notFoundCount = notFoundIds.size();
+
+        String message;
+        if (deletedCount > 0 && notFoundCount == 0) {
+            message = "Deleted record(s) for id(s): " + deletedIds;
+        } else if (deletedCount > 0) {
+            message = "Deleted record(s) for id(s): " + deletedIds + "; id(s) not found: " + notFoundIds;
+        } else if (notFoundCount > 0) {
+            message = "No records deleted; id(s) not found: " + notFoundIds;
+        } else {
+            message = "No ids provided";
+        }
+
         return new StockIndexResponse<>(
                 "SUCCESS",
-                "Records deleted successfully",
-                existingIds.size(),
-                new BulkDeleteResult(new ArrayList<>(existingIds), existingIds.size())
+                message,
+                deletedCount,
+                new BulkDeleteResult(
+                        deletedIds.isEmpty() ? null : deletedIds,
+                        deletedIds.isEmpty() ? null : deletedCount,
+                        missing.isEmpty() ? null : notFoundIds,
+                        missing.isEmpty() ? null : notFoundCount
+                )
         );
     }
     /**

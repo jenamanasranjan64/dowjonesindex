@@ -6,7 +6,7 @@ import jakarta.validation.constraints.Pattern;
 
 public record StockIndexUpdateRequest(
         @NotBlank(message = "quarter is required")
-        @Pattern(regexp = "^[1-4]$", message = "quarter must be integer between 1 and 4")
+        @Pattern(regexp = "^[1-6]$", message = "quarter must be integer between 1 and 6")
         String quarter,
 
         @NotBlank(message = "stock is required")
@@ -17,22 +17,22 @@ public record StockIndexUpdateRequest(
         String date,
 
         @NotBlank(message = "open is required")
-        @Pattern(regexp = "^(?:\\d+)(?:\\.\\d+)?$", message = "open must be a valid number >= 0")
+        @Pattern(regexp = "^(?:\\d+)(?:\\.\\d+)?$", message = "open must be a valid number value between 0-9")
         String open,
 
         @NotBlank(message = "high is required")
-        @Pattern(regexp = "^(?:\\d+)(?:\\.\\d+)?$", message = "high must be a valid number >= 0")
+        @Pattern(regexp = "^(?:\\d+)(?:\\.\\d+)?$", message = "high must be a valid number value between 0-9")
         String high,
 
         @NotBlank(message = "low is required")
-        @Pattern(regexp = "^(?:\\d+)(?:\\.\\d+)?$", message = "low must be a valid number >= 0")
+        @Pattern(regexp = "^(?:\\d+)(?:\\.\\d+)?$", message = "low must be a valid number value between 0-9")
         String low,
 
         @NotBlank(message = "close is required")
-        @Pattern(regexp = "^(?:\\d+)(?:\\.\\d+)?$", message = "close must be a valid number >= 0")
+        @Pattern(regexp = "^(?:\\d+)(?:\\.\\d+)?$", message = "close must be a valid number value between 0-9")
         String close,
 
         @NotBlank(message = "volume is required")
-        @Pattern(regexp = "^[1-9]\\d*$", message = "volume must be a valid integer > 0")
+        @Pattern(regexp = "^[1-9]\\d*$", message = "volume must be a valid number value between 0-9")
         String volume
 ) {}

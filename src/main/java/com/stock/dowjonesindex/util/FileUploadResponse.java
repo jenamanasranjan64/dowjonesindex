@@ -6,15 +6,15 @@ public class FileUploadResponse {
     public int insertedRows;
     public int failedRows;
     public List<FailedRowRecord> failedRowRecords;
-    public List<RowFailure> failures = new ArrayList<>();
-
-    public List<RowFailure> getFailures() {
-        return failures;
-    }
-
-    public void setFailures(List<RowFailure> failures) {
-        this.failures = failures;
-    }
+//    public List<RowFailure> failures = new ArrayList<>();
+//
+//    public List<RowFailure> getFailures() {
+//        return failures;
+//    }
+//
+//    public void setFailures(List<RowFailure> failures) {
+//        this.failures = failures == null ? new ArrayList<>() : failures;
+//    }
 
     public int getTotalRows() {
         return totalRows;
